@@ -168,25 +168,47 @@ async def comprobar_citas():
                 log(f"     [{i}] URL: {frame.url}")
 
             # Función auxiliar: busca texto en TODOS los frames y devuelve
-            # (frame_objeto, locator) del primer sitio donde aparezca visible
-            async def buscar_en_frames(texto):
-                """Busca un texto en la página y en todos sus iframes."""
-                # Primero, buscar en la página principal
-                try:
-                    loc = page.get_by_text(texto, exact=False).first
-                    if await loc.count() > 0 and await loc.is_visible():
-                        return page, loc
-                except Exception:
-                    pass
-                # Luego en cada iframe
-                for frame in page.frames:
-                    if frame == page.main_frame:
-                        continue
+            # (frame_objeto, locator) del primer sitio CLICABLE donde aparezca visible.
+            # Prefiere botones/enlaces/inputs sobre texto plano.
+            async def buscar_en_frames(texto, solo_clicable=True):
+                """Busca un texto en la página y en todos sus iframes.
+                Si solo_clicable=True, prefiere botones, enlaces e inputs."""
+                frames_a_buscar = [page.main_frame] + [f for f in page.frames if f != page.main_frame]
+
+                # Primera pasada: buscar SOLO en elementos clicables
+                if solo_clicable:
+                    for frame in frames_a_buscar:
+                        for selector_tipo in [
+                            f"button:has-text('{texto}')",
+                            f"a:has-text('{texto}')",
+                            f"input[value*='{texto}' i]",
+                            f"[role='button']:has-text('{texto}')",
+                            f".btn:has-text('{texto}')",
+                            f"[onclick]:has-text('{texto}')",
+                        ]:
+                            try:
+                                loc = frame.locator(selector_tipo)
+                                cnt = await loc.count()
+                                for i in range(cnt):
+                                    el = loc.nth(i)
+                                    if await el.is_visible():
+                                        tipo_frame = "iframe" if frame != page.main_frame else "página"
+                                        log(f"     ✓ '{texto}' encontrado como CLICABLE en {tipo_frame}: {selector_tipo}")
+                                        return frame, el
+                            except Exception:
+                                continue
+
+                # Segunda pasada: cualquier elemento con el texto
+                for frame in frames_a_buscar:
                     try:
-                        loc = frame.get_by_text(texto, exact=False).first
-                        if await loc.count() > 0 and await loc.is_visible():
-                            log(f"     ✓ Texto '{texto}' encontrado en iframe: {frame.url[:80]}")
-                            return frame, loc
+                        loc = frame.get_by_text(texto, exact=False)
+                        cnt = await loc.count()
+                        for i in range(cnt):
+                            el = loc.nth(i)
+                            if await el.is_visible():
+                                tipo_frame = "iframe" if frame != page.main_frame else "página"
+                                log(f"     ✓ '{texto}' encontrado como texto en {tipo_frame} (índice {i})")
+                                return frame, el
                     except Exception:
                         continue
                 return None, None
