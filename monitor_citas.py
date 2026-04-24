@@ -128,39 +128,88 @@ async def comprobar_citas():
             log(f"  ✓ Página cargada: {page.url}")
 
             # ── Paso 2: Clic en "Solicitar una nueva cita" ──
-            log("  → Paso 2: Buscando 'Solicitar una nueva cita'...")
-            try:
-                btn_nueva = page.get_by_text("Solicitar una nueva cita", exact=False).first
-                await btn_nueva.wait_for(state="visible", timeout=15000)
-                await btn_nueva.click()
-                await page.wait_for_load_state("domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(2000)
-                log("  ✓ Clic en 'Solicitar una nueva cita'")
-            except Exception:
-                # Alternativa: buscar por enlace href o imagen
-                log("  → Intentando alternativa con selector...")
-                await page.click("a:has-text('nueva cita'), a:has-text('Solicitar')", timeout=15000)
-                await page.wait_for_load_state("domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(2000)
-                log("  ✓ Clic alternativo")
+            # Los botones son imágenes clicables, no enlaces de texto
+            log("  → Paso 2: Buscando botón 'Solicitar una nueva cita'...")
+            clicado = False
+            # Intento 1: buscar por alt o title de imagen
+            for selector in [
+                "img[alt*='nueva cita' i]",
+                "img[alt*='solicitar' i]",
+                "img[title*='nueva cita' i]",
+                "a img[src*='solicitar']",
+                "a:first-of-type img",   # primer enlace con imagen en la sección de botones
+            ]:
+                try:
+                    el = page.locator(selector).first
+                    if await el.count() > 0:
+                        await el.click(timeout=8000)
+                        clicado = True
+                        log(f"  ✓ Clic con selector: {selector}")
+                        break
+                except Exception:
+                    continue
 
-            # ── Paso 3: Clic en "Solicitar Cita Previa" (botón azul) ──
+            # Intento 2: clicar el primer enlace grande de la sección central
+            if not clicado:
+                try:
+                    # Los dos botones azules son los primeros <a> con imagen en el contenido
+                    enlaces = page.locator(".contenido a, main a, #content a, article a")
+                    count = await enlaces.count()
+                    log(f"  → Encontrados {count} enlaces en el contenido, clicando el primero...")
+                    if count > 0:
+                        await enlaces.first.click(timeout=8000)
+                        clicado = True
+                        log("  ✓ Clic en primer enlace del contenido")
+                except Exception as e:
+                    log(f"  ⚠ Falló: {e}")
+
+            # Intento 3: buscar cualquier enlace que lleve a la solicitud
+            if not clicado:
+                try:
+                    await page.click("a[href*='solicitar'], a[href*='nueva'], a[href*='cita']", timeout=8000)
+                    clicado = True
+                    log("  ✓ Clic por href")
+                except Exception:
+                    pass
+
+            if not clicado:
+                raise Exception("No se encontró el botón 'Solicitar una nueva cita'")
+
+            await page.wait_for_load_state("domcontentloaded", timeout=20000)
+            await page.wait_for_timeout(2000)
+            await page.screenshot(path="paso2.png")
+            log(f"  URL tras paso 2: {page.url}")
+
+            # ── Paso 3: Clic en "Solicitar Cita Previa" (botón azul abajo de la página) ──
             log("  → Paso 3: Buscando botón 'Solicitar Cita Previa'...")
-            try:
-                btn_solicitar = page.get_by_text("Solicitar Cita Previa", exact=False).first
-                await btn_solicitar.wait_for(state="visible", timeout=15000)
-                await btn_solicitar.click()
-                await page.wait_for_load_state("domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(3000)
-                log("  ✓ Clic en 'Solicitar Cita Previa'")
-            except Exception:
-                # Alternativa: buscar enlace directo
-                log("  → Intentando con enlace directo...")
-                link = page.locator("a:has-text('Cita Previa en este enlace'), a.btn:has-text('Solicitar')").first
-                await link.click(timeout=15000)
-                await page.wait_for_load_state("domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(3000)
-                log("  ✓ Clic alternativo en enlace")
+            clicado3 = False
+            for selector in [
+                "a.btn:has-text('Solicitar')",
+                "a:has-text('Solicitar Cita Previa')",
+                "a:has-text('Cita Previa en este enlace')",
+                "input[value*='Solicitar' i]",
+                "button:has-text('Solicitar')",
+                ".btn-primary",
+                "a[href*='cs.html']",
+                "a[href*='cita']",
+            ]:
+                try:
+                    el = page.locator(selector).first
+                    if await el.count() > 0:
+                        await el.click(timeout=8000)
+                        clicado3 = True
+                        log(f"  ✓ Paso 3 con selector: {selector}")
+                        break
+                except Exception:
+                    continue
+
+            if not clicado3:
+                raise Exception("No se encontró el botón 'Solicitar Cita Previa'")
+
+            await page.wait_for_load_state("domcontentloaded", timeout=20000)
+            await page.wait_for_timeout(3000)
+            await page.screenshot(path="paso3.png")
+            log(f"  URL tras paso 3: {page.url}")
 
             # ── Paso 4: Seleccionar trámite ──
             log(f"  → Paso 4: Seleccionando trámite: '{TRAMITE}'...")
