@@ -38,12 +38,17 @@ def debe_ejecutarse():
     """
     Control de frecuencia:
     - Si es ejecución MANUAL (workflow_dispatch) → ejecutar siempre
-    - Martes y jueves de 7:00 a 15:00 Canarias → cada 5 min (siempre)
-    - Resto → cada 10 min (solo si el minuto es divisible por 10)
+    - Si viene de cron-job.org (repository_dispatch) → ejecutar siempre
+      (cron-job.org ya controla la frecuencia externamente)
+    - Si viene de schedule de GitHub (fallback) → aplicar lógica interna:
+        * Martes y jueves de 7:00 a 15:00 Canarias → cada 5 min
+        * Resto → cada 10 min
     """
-    # Si se lanzó manualmente desde GitHub → ejecutar sí o sí
-    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
-        log("🚀 Ejecución manual → ejecutar siempre")
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+
+    # Ejecuciones disparadas externamente → siempre ejecutar
+    if event_name in ("workflow_dispatch", "repository_dispatch"):
+        log(f"🚀 Evento '{event_name}' → ejecutar siempre")
         return True
 
     ahora = datetime.now(TZ_CANARIAS)
