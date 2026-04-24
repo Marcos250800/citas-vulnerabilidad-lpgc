@@ -129,61 +129,153 @@ async def comprobar_citas():
         try:
             # ── Paso 1: Abrir página de cita previa ──
             log("  → Paso 1: Abriendo página de cita previa...")
-            await page.goto(URL_CITA_PREVIA, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(3000)
+            await page.goto(URL_CITA_PREVIA, wait_until="networkidle", timeout=45000)
+            await page.wait_for_timeout(4000)
             log(f"  ✓ Página cargada: {page.url}")
 
-            # ── Paso 2: Clic en "Solicitar una nueva cita" ──
-            # Los botones son imágenes clicables, no enlaces de texto
-            log("  → Paso 2: Buscando botón 'Solicitar una nueva cita'...")
-            clicado = False
-            # Intento 1: buscar por alt o title de imagen
-            for selector in [
-                "img[alt*='nueva cita' i]",
-                "img[alt*='solicitar' i]",
-                "img[title*='nueva cita' i]",
-                "a img[src*='solicitar']",
-                "a:first-of-type img",   # primer enlace con imagen en la sección de botones
+            # ── Cerrar posible banner de cookies ──
+            log("  → Intentando cerrar banner de cookies (si existe)...")
+            for cookie_selector in [
+                "button:has-text('Aceptar')",
+                "button:has-text('Acepto')",
+                "button:has-text('ACEPTAR')",
+                "a:has-text('Aceptar')",
+                "#cookie-accept",
+                ".cookie-accept",
+                "[id*='cookie'] button",
+                "[class*='cookie'] button",
             ]:
                 try:
-                    el = page.locator(selector).first
-                    if await el.count() > 0:
-                        await el.click(timeout=8000)
-                        clicado = True
-                        log(f"  ✓ Clic con selector: {selector}")
+                    el = page.locator(cookie_selector).first
+                    if await el.count() > 0 and await el.is_visible():
+                        await el.click(timeout=3000)
+                        log(f"  ✓ Banner de cookies cerrado con: {cookie_selector}")
+                        await page.wait_for_timeout(1500)
                         break
                 except Exception:
                     continue
 
-            # Intento 2: clicar el primer enlace grande de la sección central
-            if not clicado:
-                try:
-                    # Los dos botones azules son los primeros <a> con imagen en el contenido
-                    enlaces = page.locator(".contenido a, main a, #content a, article a")
-                    count = await enlaces.count()
-                    log(f"  → Encontrados {count} enlaces en el contenido, clicando el primero...")
-                    if count > 0:
-                        await enlaces.first.click(timeout=8000)
-                        clicado = True
-                        log("  ✓ Clic en primer enlace del contenido")
-                except Exception as e:
-                    log(f"  ⚠ Falló: {e}")
+            # Guardar HTML para diagnóstico
+            html_content = await page.content()
+            with open("pagina_inicial.html", "w", encoding="utf-8") as f:
+                f.write(html_content)
+            log(f"  📄 HTML guardado ({len(html_content)} chars)")
+            await page.screenshot(path="paso1.png")
 
-            # Intento 3: buscar cualquier enlace que lleve a la solicitud
-            if not clicado:
+            # ── Paso 2: Clic en "Solicitar una nueva cita" ──
+            # IMPORTANTE: restringir búsqueda al contenido central, NO header/footer
+            log("  → Paso 2: Buscando botón 'Solicitar una nueva cita'...")
+            clicado = False
+
+            # Primero: diagnóstico — imprimir todos los enlaces del contenido central
+            log("  📋 Listando enlaces del contenido principal:")
+            selectores_contenido = [
+                "#content-interior a",
+                "#content a",
+                "main a",
+                ".contenido a",
+                "article a",
+                "#main a",
+            ]
+            enlaces_info = []
+            for sel_cont in selectores_contenido:
                 try:
-                    await page.click("a[href*='solicitar'], a[href*='nueva'], a[href*='cita']", timeout=8000)
-                    clicado = True
-                    log("  ✓ Clic por href")
+                    loc = page.locator(sel_cont)
+                    cnt = await loc.count()
+                    if cnt > 0 and cnt < 50:  # no listar si hay muchos (es el layout)
+                        log(f"     Zona '{sel_cont}': {cnt} enlaces")
+                        for i in range(min(cnt, 15)):
+                            try:
+                                el = loc.nth(i)
+                                href = await el.get_attribute("href") or ""
+                                text = (await el.inner_text() or "").strip()[:60]
+                                title = await el.get_attribute("title") or ""
+                                visible = await el.is_visible()
+                                if visible:
+                                    log(f"       [{i}] texto='{text}' | href='{href[:80]}' | title='{title[:40]}'")
+                                    enlaces_info.append((sel_cont, i, text, href, title))
+                            except Exception:
+                                continue
+                        break  # suficiente con un selector que tenga enlaces
                 except Exception:
-                    pass
+                    continue
+
+            # Intento 1: get_by_text
+            try:
+                loc = page.get_by_text("Solicitar una nueva cita", exact=False)
+                count = await loc.count()
+                log(f"     get_by_text('Solicitar una nueva cita'): {count} elementos")
+                for i in range(count):
+                    el = loc.nth(i)
+                    if await el.is_visible():
+                        await el.click(timeout=5000)
+                        clicado = True
+                        log(f"  ✓ Clic con get_by_text (índice {i})")
+                        break
+            except Exception as e:
+                log(f"     get_by_text falló: {e}")
+
+            # Intento 2: buscar un enlace cuyo href/title/texto mencione "solicitar" o "nueva"
+            # PERO solo dentro del contenido central (descartamos header/footer)
+            if not clicado:
+                for sel_contenedor in ["#content-interior", "#content", "main", ".contenido", "article"]:
+                    try:
+                        cont = page.locator(sel_contenedor)
+                        if await cont.count() == 0:
+                            continue
+                        # Buscar dentro: enlaces con texto/title/href que mencione solicitar o nueva
+                        candidatos = cont.locator(
+                            "a:has-text('Solicitar'), a:has-text('Nueva'), a:has-text('nueva'), "
+                            "a[title*='nueva' i], a[title*='solicitar' i], "
+                            "a[href*='solicitar'], a[href*='nueva'], "
+                            "a:has(img[alt*='nueva' i]), a:has(img[alt*='solicitar' i])"
+                        )
+                        cnt = await candidatos.count()
+                        if cnt > 0:
+                            log(f"     En '{sel_contenedor}' encontrados {cnt} candidatos")
+                            for i in range(cnt):
+                                el = candidatos.nth(i)
+                                if await el.is_visible():
+                                    href = await el.get_attribute("href") or ""
+                                    # Descartar los de "consultar" o "anular"
+                                    if "consultar" in href.lower() or "anular" in href.lower():
+                                        continue
+                                    await el.click(timeout=5000)
+                                    clicado = True
+                                    log(f"  ✓ Clic en candidato [{i}] con href='{href}'")
+                                    break
+                            if clicado:
+                                break
+                    except Exception as e:
+                        log(f"     Contenedor '{sel_contenedor}' falló: {e}")
+                        continue
+
+            # Intento 3 (último recurso): usar info de enlaces_info recopilada y elegir
+            # el primero del contenido que no sea de consultar/anular
+            if not clicado and enlaces_info:
+                for sel_cont, idx, text, href, title in enlaces_info:
+                    if any(x in (href + text + title).lower() for x in ["consultar", "anular", "cancelar"]):
+                        continue
+                    if any(x in (href + text + title).lower() for x in ["solicitar", "nueva", "cita"]):
+                        try:
+                            el = page.locator(sel_cont).nth(idx)
+                            await el.click(timeout=5000)
+                            clicado = True
+                            log(f"  ✓ Clic fallback: '{text}' ({href})")
+                            break
+                        except Exception:
+                            continue
 
             if not clicado:
-                raise Exception("No se encontró el botón 'Solicitar una nueva cita'")
+                raise Exception("No se encontró el botón 'Solicitar una nueva cita' en el contenido")
 
-            await page.wait_for_load_state("domcontentloaded", timeout=20000)
-            await page.wait_for_timeout(2000)
+            await page.wait_for_load_state("networkidle", timeout=25000)
+            await page.wait_for_timeout(3000)
             await page.screenshot(path="paso2.png")
+            # Guardar HTML del paso 2
+            html2 = await page.content()
+            with open("pagina_paso2.html", "w", encoding="utf-8") as f:
+                f.write(html2)
             log(f"  URL tras paso 2: {page.url}")
 
             # ── Paso 3: Clic en "Solicitar Cita Previa" (botón azul abajo de la página) ──
