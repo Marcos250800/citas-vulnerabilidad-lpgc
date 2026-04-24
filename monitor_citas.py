@@ -37,9 +37,15 @@ def log(msg):
 def debe_ejecutarse():
     """
     Control de frecuencia:
+    - Si es ejecución MANUAL (workflow_dispatch) → ejecutar siempre
     - Martes y jueves de 7:00 a 15:00 Canarias → cada 5 min (siempre)
     - Resto → cada 10 min (solo si el minuto es divisible por 10)
     """
+    # Si se lanzó manualmente desde GitHub → ejecutar sí o sí
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        log("🚀 Ejecución manual → ejecutar siempre")
+        return True
+
     ahora = datetime.now(TZ_CANARIAS)
     dia = ahora.weekday()  # 0=lun, 1=mar, 2=mié, 3=jue ...
     hora = ahora.hour
