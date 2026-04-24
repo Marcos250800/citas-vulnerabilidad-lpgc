@@ -2,10 +2,11 @@ name: 🔍 Monitor Citas Vulnerabilidad LPGC
 
 on:
   schedule:
-    # Cada 5 minutos — el script Python decide si ejecuta o salta
-    # (martes/jueves 7-15h Canarias → cada 5 min, resto → cada 10 min)
+    # Backup: por si cron-job.org falla, GitHub intenta cada 5 min
     - cron: '*/5 * * * *'
   workflow_dispatch:  # Permite ejecutarlo manualmente
+  repository_dispatch:  # Permite ejecutarlo desde cron-job.org via API
+    types: [check-citas]
 
 jobs:
   check-citas:
