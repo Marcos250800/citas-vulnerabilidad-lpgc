@@ -43,5 +43,7 @@ jobs:
             error.png
             resultado.png
             contenido_desconocido.png
+            paso2.png
+            paso3.png
           if-no-files-found: ignore
           retention-days: 3
