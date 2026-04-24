@@ -1,0 +1,47 @@
+name: 🔍 Monitor Citas Vulnerabilidad LPGC
+
+on:
+  schedule:
+    # Cada 5 minutos — el script Python decide si ejecuta o salta
+    # (martes/jueves 7-15h Canarias → cada 5 min, resto → cada 10 min)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # Permite ejecutarlo manualmente
+
+jobs:
+  check-citas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+
+    steps:
+      - name: 📥 Checkout código
+        uses: actions/checkout@v4
+
+      - name: 🐍 Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Instalar dependencias
+        run: |
+          pip install playwright requests
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 🔍 Ejecutar monitor
+        env:
+          TELEGRAM_BOT_TOKEN_LPGC: ${{ secrets.TELEGRAM_BOT_TOKEN_LPGC }}
+          TELEGRAM_CHAT_ID_LPGC: ${{ secrets.TELEGRAM_CHAT_ID_LPGC }}
+        run: python monitor_citas.py
+
+      - name: 📸 Subir capturas (debug)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capturas-${{ github.run_number }}
+          path: |
+            cita_encontrada.png
+            error.png
+            resultado.png
+            contenido_desconocido.png
+          if-no-files-found: ignore
+          retention-days: 3
