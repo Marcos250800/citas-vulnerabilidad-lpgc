@@ -46,6 +46,8 @@ jobs:
             paso1.png
             paso2.png
             paso3.png
+            paso4.png
+            paso5.png
             pagina_inicial.html
             pagina_paso2.html
           if-no-files-found: ignore
