@@ -162,189 +162,122 @@ async def comprobar_citas():
             log(f"  📄 HTML guardado ({len(html_content)} chars)")
             await page.screenshot(path="paso1.png")
 
-            # ── Paso 2: Clic en "Solicitar una nueva cita" ──
-            # IMPORTANTE: restringir búsqueda al contenido central, NO header/footer
-            log("  → Paso 2: Buscando botón 'Solicitar una nueva cita'...")
-            clicado = False
+            # ── Listar todos los frames/iframes de la página ──
+            log("  🖼️ Frames presentes en la página:")
+            for i, frame in enumerate(page.frames):
+                log(f"     [{i}] URL: {frame.url}")
 
-            # Primero: diagnóstico — imprimir todos los enlaces del contenido central
-            log("  📋 Listando enlaces del contenido principal:")
-            selectores_contenido = [
-                "#content-interior a",
-                "#content a",
-                "main a",
-                ".contenido a",
-                "article a",
-                "#main a",
-            ]
-            enlaces_info = []
-            for sel_cont in selectores_contenido:
+            # Función auxiliar: busca texto en TODOS los frames y devuelve
+            # (frame_objeto, locator) del primer sitio donde aparezca visible
+            async def buscar_en_frames(texto):
+                """Busca un texto en la página y en todos sus iframes."""
+                # Primero, buscar en la página principal
                 try:
-                    loc = page.locator(sel_cont)
-                    cnt = await loc.count()
-                    if cnt > 0 and cnt < 50:  # no listar si hay muchos (es el layout)
-                        log(f"     Zona '{sel_cont}': {cnt} enlaces")
-                        for i in range(min(cnt, 15)):
-                            try:
-                                el = loc.nth(i)
-                                href = await el.get_attribute("href") or ""
-                                text = (await el.inner_text() or "").strip()[:60]
-                                title = await el.get_attribute("title") or ""
-                                visible = await el.is_visible()
-                                if visible:
-                                    log(f"       [{i}] texto='{text}' | href='{href[:80]}' | title='{title[:40]}'")
-                                    enlaces_info.append((sel_cont, i, text, href, title))
-                            except Exception:
-                                continue
-                        break  # suficiente con un selector que tenga enlaces
+                    loc = page.get_by_text(texto, exact=False).first
+                    if await loc.count() > 0 and await loc.is_visible():
+                        return page, loc
                 except Exception:
-                    continue
-
-            # Intento 1: get_by_text
-            try:
-                loc = page.get_by_text("Solicitar una nueva cita", exact=False)
-                count = await loc.count()
-                log(f"     get_by_text('Solicitar una nueva cita'): {count} elementos")
-                for i in range(count):
-                    el = loc.nth(i)
-                    if await el.is_visible():
-                        await el.click(timeout=5000)
-                        clicado = True
-                        log(f"  ✓ Clic con get_by_text (índice {i})")
-                        break
-            except Exception as e:
-                log(f"     get_by_text falló: {e}")
-
-            # Intento 2: buscar un enlace cuyo href/title/texto mencione "solicitar" o "nueva"
-            # PERO solo dentro del contenido central (descartamos header/footer)
-            if not clicado:
-                for sel_contenedor in ["#content-interior", "#content", "main", ".contenido", "article"]:
+                    pass
+                # Luego en cada iframe
+                for frame in page.frames:
+                    if frame == page.main_frame:
+                        continue
                     try:
-                        cont = page.locator(sel_contenedor)
-                        if await cont.count() == 0:
-                            continue
-                        # Buscar dentro: enlaces con texto/title/href que mencione solicitar o nueva
-                        candidatos = cont.locator(
-                            "a:has-text('Solicitar'), a:has-text('Nueva'), a:has-text('nueva'), "
-                            "a[title*='nueva' i], a[title*='solicitar' i], "
-                            "a[href*='solicitar'], a[href*='nueva'], "
-                            "a:has(img[alt*='nueva' i]), a:has(img[alt*='solicitar' i])"
-                        )
-                        cnt = await candidatos.count()
-                        if cnt > 0:
-                            log(f"     En '{sel_contenedor}' encontrados {cnt} candidatos")
-                            for i in range(cnt):
-                                el = candidatos.nth(i)
-                                if await el.is_visible():
-                                    href = await el.get_attribute("href") or ""
-                                    # Descartar los de "consultar" o "anular"
-                                    if "consultar" in href.lower() or "anular" in href.lower():
-                                        continue
-                                    await el.click(timeout=5000)
-                                    clicado = True
-                                    log(f"  ✓ Clic en candidato [{i}] con href='{href}'")
-                                    break
-                            if clicado:
-                                break
-                    except Exception as e:
-                        log(f"     Contenedor '{sel_contenedor}' falló: {e}")
+                        loc = frame.get_by_text(texto, exact=False).first
+                        if await loc.count() > 0 and await loc.is_visible():
+                            log(f"     ✓ Texto '{texto}' encontrado en iframe: {frame.url[:80]}")
+                            return frame, loc
+                    except Exception:
                         continue
+                return None, None
 
-            # Intento 3 (último recurso): usar info de enlaces_info recopilada y elegir
-            # el primero del contenido que no sea de consultar/anular
-            if not clicado and enlaces_info:
-                for sel_cont, idx, text, href, title in enlaces_info:
-                    if any(x in (href + text + title).lower() for x in ["consultar", "anular", "cancelar"]):
-                        continue
-                    if any(x in (href + text + title).lower() for x in ["solicitar", "nueva", "cita"]):
-                        try:
-                            el = page.locator(sel_cont).nth(idx)
-                            await el.click(timeout=5000)
-                            clicado = True
-                            log(f"  ✓ Clic fallback: '{text}' ({href})")
-                            break
-                        except Exception:
-                            continue
+            # ── Paso 2: Clic en "Solicitar una nueva cita" ──
+            log("  → Paso 2: Buscando 'Solicitar una nueva cita' (en página e iframes)...")
+            frame_activo, btn = await buscar_en_frames("Solicitar una nueva cita")
+            if btn is None:
+                # Probar variantes
+                for variante in ["Solicitar nueva cita", "solicitar una nueva", "Nueva cita", "nueva cita"]:
+                    frame_activo, btn = await buscar_en_frames(variante)
+                    if btn is not None:
+                        log(f"     ✓ Encontrado con variante: '{variante}'")
+                        break
 
-            if not clicado:
-                raise Exception("No se encontró el botón 'Solicitar una nueva cita' en el contenido")
+            if btn is None:
+                raise Exception("No se encontró 'Solicitar una nueva cita' en ningún frame")
 
-            await page.wait_for_load_state("networkidle", timeout=25000)
-            await page.wait_for_timeout(3000)
+            await btn.click(timeout=10000)
+            log("  ✓ Clic en 'Solicitar una nueva cita'")
+            await page.wait_for_timeout(4000)
             await page.screenshot(path="paso2.png")
-            # Guardar HTML del paso 2
             html2 = await page.content()
             with open("pagina_paso2.html", "w", encoding="utf-8") as f:
                 f.write(html2)
             log(f"  URL tras paso 2: {page.url}")
 
-            # ── Paso 3: Clic en "Solicitar Cita Previa" (botón azul abajo de la página) ──
+            # ── Paso 3: Clic en "Solicitar Cita Previa" ──
             log("  → Paso 3: Buscando botón 'Solicitar Cita Previa'...")
-            clicado3 = False
-            for selector in [
-                "a.btn:has-text('Solicitar')",
-                "a:has-text('Solicitar Cita Previa')",
-                "a:has-text('Cita Previa en este enlace')",
-                "input[value*='Solicitar' i]",
-                "button:has-text('Solicitar')",
-                ".btn-primary",
-                "a[href*='cs.html']",
-                "a[href*='cita']",
-            ]:
-                try:
-                    el = page.locator(selector).first
-                    if await el.count() > 0:
-                        await el.click(timeout=8000)
-                        clicado3 = True
-                        log(f"  ✓ Paso 3 con selector: {selector}")
+            frame_activo, btn = await buscar_en_frames("Solicitar Cita Previa")
+            if btn is None:
+                for variante in ["Solicitar cita previa", "Cita Previa en este enlace"]:
+                    frame_activo, btn = await buscar_en_frames(variante)
+                    if btn is not None:
+                        log(f"     ✓ Encontrado con variante: '{variante}'")
                         break
-                except Exception:
-                    continue
 
-            if not clicado3:
-                raise Exception("No se encontró el botón 'Solicitar Cita Previa'")
+            if btn is None:
+                raise Exception("No se encontró 'Solicitar Cita Previa' en ningún frame")
 
-            await page.wait_for_load_state("domcontentloaded", timeout=20000)
-            await page.wait_for_timeout(3000)
+            await btn.click(timeout=10000)
+            log("  ✓ Clic en 'Solicitar Cita Previa'")
+            await page.wait_for_timeout(5000)
             await page.screenshot(path="paso3.png")
             log(f"  URL tras paso 3: {page.url}")
 
             # ── Paso 4: Seleccionar trámite ──
-            log(f"  → Paso 4: Seleccionando trámite: '{TRAMITE}'...")
-            try:
-                btn_tramite = page.get_by_text(TRAMITE, exact=False).first
-                await btn_tramite.wait_for(state="visible", timeout=15000)
-                await btn_tramite.click()
-                await page.wait_for_timeout(3000)
-                log("  ✓ Trámite seleccionado")
-            except Exception:
-                # Buscar por botón con texto parcial
-                log("  → Buscando por selector alternativo...")
-                await page.click(f"button:has-text('vulnerabilidad'), a:has-text('vulnerabilidad')", timeout=15000)
-                await page.wait_for_timeout(3000)
-                log("  ✓ Trámite seleccionado (alternativo)")
+            log(f"  → Paso 4: Seleccionando trámite 'Informe de vulnerabilidad...'...")
+            frame_activo, btn = await buscar_en_frames("Informe de vulnerabilidad")
+            if btn is None:
+                frame_activo, btn = await buscar_en_frames("vulnerabilidad para regularización")
+            if btn is None:
+                raise Exception("No se encontró el trámite 'Informe de vulnerabilidad'")
 
-            # ── Paso 5: Seleccionar distrito ──
-            log(f"  → Paso 5: Seleccionando distrito: '{DISTRITO}'...")
-            try:
-                btn_distrito = page.get_by_text("METROPOL", exact=False).first
-                await btn_distrito.wait_for(state="visible", timeout=15000)
-                await btn_distrito.click()
-                await page.wait_for_timeout(5000)
-                log("  ✓ Distrito seleccionado")
-            except Exception:
-                log("  → Buscando METROPOL por selector...")
-                await page.click("button:has-text('METROPOL'), a:has-text('METROPOL')", timeout=15000)
-                await page.wait_for_timeout(5000)
-                log("  ✓ Distrito seleccionado (alternativo)")
+            await btn.click(timeout=10000)
+            log("  ✓ Trámite seleccionado")
+            await page.wait_for_timeout(4000)
+            await page.screenshot(path="paso4.png")
+            log(f"  URL tras paso 4: {page.url}")
+
+            # ── Paso 5: Seleccionar distrito METROPOL ──
+            log(f"  → Paso 5: Seleccionando distrito METROPOL...")
+            frame_activo, btn = await buscar_en_frames("METROPOL")
+            if btn is None:
+                raise Exception("No se encontró el distrito METROPOL")
+
+            await btn.click(timeout=10000)
+            log("  ✓ Distrito seleccionado")
+            await page.wait_for_timeout(6000)
+            await page.screenshot(path="paso5.png")
+            log(f"  URL tras paso 5: {page.url}")
 
             # ── Paso 6: Tomar captura y leer resultado ──
             log("  → Paso 6: Leyendo resultado de disponibilidad...")
             await page.screenshot(path="resultado.png", full_page=False)
 
-            contenido = await page.inner_text("body")
+            # Leer contenido de TODOS los frames (el resultado puede estar en iframe)
+            contenido_total = ""
+            try:
+                contenido_total += await page.inner_text("body")
+            except Exception:
+                pass
+            for frame in page.frames:
+                if frame == page.main_frame:
+                    continue
+                try:
+                    contenido_total += "\n" + await frame.inner_text("body")
+                except Exception:
+                    continue
 
-            if TEXTO_SIN_CITA.lower() in contenido.lower():
+            if TEXTO_SIN_CITA.lower() in contenido_total.lower():
                 log("  ❌ No existen citas disponibles")
                 await browser.close()
                 return False
@@ -355,7 +288,7 @@ async def comprobar_citas():
                     "disponible", "mostrarán los tres días",
                     "reservar", "confirmar"
                 ]
-                hay_cita = any(i in contenido.lower() for i in indicios)
+                hay_cita = any(i in contenido_total.lower() for i in indicios)
 
                 if hay_cita:
                     log("  🎉 ¡¡CITAS DETECTADAS!!")
@@ -364,7 +297,7 @@ async def comprobar_citas():
                     return True
                 else:
                     # Contenido desconocido → avisar por si acaso
-                    log(f"  ⚠ Contenido no reconocido: {contenido[:300]}")
+                    log(f"  ⚠ Contenido no reconocido: {contenido_total[:300]}")
                     await page.screenshot(path="contenido_desconocido.png", full_page=False)
                     await browser.close()
                     return "unknown"
